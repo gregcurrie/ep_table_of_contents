@@ -1,9 +1,26 @@
-![Publish Status](https://github.com/ether/ep_table_of_contents/workflows/Node.js%20Package/badge.svg) ![Backend Tests Status](https://github.com/ether/ep_table_of_contents/workflows/Backend%20tests/badge.svg)
+![Publish Status](https://github.com/ether/ep_table_of_contents/workflows/Node.js%20Package/badge.svg) [![Backend Tests Status](https://github.com/ether/ep_table_of_contents/actions/workflows/test-and-release.yml/badge.svg)](https://github.com/ether/ep_table_of_contents/actions/workflows/test-and-release.yml)
 
 # Builds a table of contents into the Etherpad interface
 
 Enable under settings.
 Create headings, watch the TOC populate in real time.
+
+## Installation
+
+Install the way Etherpad expects plugins to be installed — via the admin
+UI (**Admin → Manage Plugins → Search** for `ep_table_of_contents` and
+click *Install*), or from the Etherpad root directory:
+
+```sh
+pnpm run plugins install ep_table_of_contents
+```
+
+> ⚠️ Don't run `npm i ep_table_of_contents` yourself from the Etherpad
+> source tree. It adds the plugin to the top-level `package.json` but
+> doesn't hook it into Etherpad's own plugin registry, which can leave
+> Etherpad unable to start with `npm ls` errors (see #154).
+
+After installing, restart Etherpad.
 
 ## Configuration
 
@@ -24,6 +41,23 @@ If you want to have a button in the toolbar to toggle the TOC, add following sni
   "show_button": true
 },
 ```
+
+## Installation
+
+Install from the Etherpad admin UI (**Admin → Manage Plugins**,
+search for `ep_table_of_contents` and click *Install*), or from the Etherpad
+root directory:
+
+```sh
+pnpm run plugins install ep_table_of_contents
+```
+
+> ⚠️ Don't run `npm i` / `npm install` yourself from the Etherpad
+> source tree — Etherpad tracks installed plugins through its own
+> plugin-manager, and hand-editing `package.json` can leave the
+> server unable to start.
+
+After installing, restart Etherpad.
 
 ## License
 Copyright 2014, John McLear

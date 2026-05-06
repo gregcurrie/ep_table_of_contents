@@ -1,10 +1,76 @@
 'use strict';
 
-$('#tocButton').click(() => {
-  $('#toc').toggle();
-});
+const getHeadingLevel = (tag) => {
+  const match = /^h([1-6])$/.exec(tag);
+  return match ? Number(match[1]) : null;
+};
 
-const tableOfContents = {
+const getOutlineEntries = (toc) => {
+  const stack = [];
+  const counters = [];
+
+  const outlineEntries = toc.map((entry) => {
+    const level = getHeadingLevel(entry.tag);
+    if (level == null) {
+      return {
+        ...entry,
+        displayDepth: 1,
+        numbering: '',
+        numberParts: [],
+      };
+    }
+
+    while (stack.length > 0 && stack[stack.length - 1] >= level) {
+      stack.pop();
+    }
+
+    const depth = stack.length + 1;
+    counters.length = depth;
+    counters[depth - 1] = (counters[depth - 1] || 0) + 1;
+    stack.push(level);
+
+    return {
+      ...entry,
+      displayDepth: depth,
+      numbering: counters.join('.'),
+      numberParts: [...counters],
+    };
+  });
+
+  const topLevelHeadings = outlineEntries.filter((entry) => entry.numberParts.length === 1);
+  if (topLevelHeadings.length !== 1) return outlineEntries;
+
+  return outlineEntries.map((entry) => {
+    if (entry.numberParts.length === 0) return entry;
+    if (entry.numberParts.length === 1) {
+      return {
+        ...entry,
+        numbering: '',
+      };
+    }
+
+    return {
+      ...entry,
+      displayDepth: entry.displayDepth - 1,
+      numbering: entry.numberParts.slice(1).join('.'),
+    };
+  });
+};
+
+if (typeof $ !== 'undefined') {
+  $('#tocButton').click(() => {
+    $('#toc').toggle();
+  });
+}
+
+// Expose on globalThis so other plugin scripts (postAceInit.js,
+// aceEditEvent.js) that run in their own CommonJS-style module scopes can
+// still reach it. Top-level `const` in a <script> tag is script-scoped,
+// not a global, so without this the bare `tableOfContents` identifier in
+// those modules throws `ReferenceError: tableOfContents is not defined`
+// on pad load. globalThis resolves to `window` in the browser and to
+// `global` in Node.js, so the Node unit tests keep working too.
+const tableOfContents = globalThis.tableOfContents = {
 
   enable() {
     $('#toc').show();
@@ -17,9 +83,7 @@ const tableOfContents = {
 
   // Find Tags
   findTags: () => {
-    const toc = {}; // The main object we will use
-    const tocL = {}; // A per line record of each TOC item
-    let count = 0;
+    const toc = [];
     let delims = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', '.h1', '.h2', '.h3', '.h4', '.h5', '.h6'];
     if (clientVars.plugins.plugins.ep_context) {
       if (clientVars.plugins.plugins.ep_context.styles) {
@@ -47,37 +111,29 @@ const tableOfContents = {
         linkText = linkText.replace(/\s*#*/, '');
       }
 
-      // Create an object of lineNumbers that include the tag
-      tocL[lineNumber] = tag;
-
-      // Does the previous line already have this delim?
-      // If so do nothing..
-      if (tocL[lineNumber - 1]) {
-        if (tocL[lineNumber - 1] === tag) return;
-      }
-
-      toc[count] = {
+      toc.push({
         tag,
         y: newY,
         text: linkText,
         focusId,
         lineNumber,
-      };
-      count++;
+      });
     });
 
+    const outlineEntries = getOutlineEntries(toc);
     clientVars.plugins.plugins.ep_table_of_context = toc;
     $('#tocItems').html('');
-    $.each(toc, (h, v) => { // for each item we should display
+    $.each(outlineEntries, (index, entry) => {
+      const label = entry.numbering ? `${entry.numbering}. ${entry.text}` : entry.text;
       const $link = $('<a>', {
-        text: v.text,
-        title: v.text,
+        text: label,
+        title: entry.text,
         href: '#',
-        class: `tocItem toc${v.tag}`,
-        click: () => { tableOfContents.scroll(`${v.y}`); return false; },
+        class: `tocItem tocDepth${Math.min(entry.displayDepth, 6)}`,
+        click: () => { tableOfContents.scroll(`${entry.y}`); return false; },
       });
-      $link.data('class', `toc${v.tag}`);
-      $link.data('offset', `${v.y}`);
+      $link.attr('data-toc-index', index);
+      $link.data('offset', `${entry.y}`);
       $link.appendTo('#tocItems');
     });
   },
@@ -98,29 +154,46 @@ const tableOfContents = {
     const repLineNumber = rep.selEnd[0]; // line Number
 
     // So given a line number of 10 and a toc of [4,8,12] we want to find 8..
+    let activeTocIndex = null;
     $.each(toc, (k, line) => {
       if (repLineNumber >= line.lineNumber) {
-        // we might be showing this..
-        const nextLine = toc[k];
-        if (nextLine.lineNumber <= repLineNumber) {
-          const activeToc = parseInt(k) + 1;
-
-          // Seems expensive, we go through each item and remove class
-          $('.tocItem').each(function () {
-            $(this).removeClass('activeTOC');
-          });
-
-          $(`.toch${activeToc}`).addClass('activeTOC');
-        }
+        activeTocIndex = Number(k);
       }
     });
+
+    $('.tocItem').removeClass('activeTOC');
+    if (activeTocIndex === null) return;
+    $(`.tocItem[data-toc-index="${activeTocIndex}"]`).addClass('activeTOC');
+  },
+
+  // findTags() walks every heading and rebuilds the entire ToC DOM. On
+  // pads with hundreds of headings this blocked the main thread on
+  // every keystroke and produced the 1-char-per-second typing seen in
+  // #51. Debounce the expensive scan — still fast enough to feel
+  // responsive, but no longer fires per keystroke.
+  _findTagsTimer: null,
+  _findTagsPending: false,
+  scheduleFindTags: (rep) => {
+    if (tableOfContents._findTagsTimer != null) {
+      tableOfContents._findTagsPending = true;
+      return;
+    }
+    tableOfContents._findTagsTimer = setTimeout(() => {
+      tableOfContents._findTagsTimer = null;
+      tableOfContents.findTags();
+      if (tableOfContents._findTagsPending) {
+        tableOfContents._findTagsPending = false;
+        tableOfContents.scheduleFindTags();
+      }
+    }, 300);
   },
 
   update: (rep) => {
     if (rep) {
       tableOfContents.showPosition(rep);
     }
-    tableOfContents.getPadHTML(rep);
+    if (!$('#options-toc').is(':checked')) return;
+    tableOfContents.scheduleFindTags(rep);
   },
 
   scroll: (newY) => {
@@ -132,7 +205,12 @@ const tableOfContents = {
 
   getParam: (sname) => {
     const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.has(sname);
+    if (!urlParams.has(sname)) return null;
+    const value = urlParams.get(sname);
+    // ?toc with no value or ?toc=true means enable
+    // ?toc=false means disable
+    if (value === 'false') return false;
+    return true;
   },
 
 };
